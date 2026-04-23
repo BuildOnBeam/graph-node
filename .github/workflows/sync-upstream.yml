@@ -1,0 +1,142 @@
+name: Sync with upstream graphprotocol/graph-node
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Monday 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_URL: https://github.com/graphprotocol/graph-node.git
+  UPSTREAM_BRANCH: master
+  REVIEWER: vladzr
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Register 'ours' merge driver
+        # .gitattributes maps .github/workflows/** to merge=ours; this makes that
+        # driver a no-op so the fork's version wins on conflicts.
+        run: git config merge.ours.driver true
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+      - name: Check for new commits
+        id: check
+        run: |
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with upstream/$UPSTREAM_BRANCH — nothing to do."
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "Commits to sync:"
+            git log --oneline "HEAD..upstream/$UPSTREAM_BRANCH" | head -50
+          fi
+
+      - name: Create branch and merge upstream
+        if: steps.check.outputs.up_to_date != 'true'
+        id: merge
+        run: |
+          BRANCH="sync-upstream-$(date -u +%Y%m%d)"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pre_merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # If a prior same-day run left a branch behind, replace it.
+          git push origin --delete "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          if ! git merge --no-ff --no-edit "upstream/$UPSTREAM_BRANCH"; then
+            echo "::error::Merge failed — conflict outside .github/workflows/. Resolve manually."
+            git status
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+      - name: Detect newly-added workflow files
+        if: steps.check.outputs.up_to_date != 'true'
+        id: new_workflows
+        run: |
+          ADDED=$(git diff --name-only --diff-filter=A \
+            "${{ steps.merge.outputs.pre_merge_sha }}..HEAD" -- .github/workflows/)
+          if [ -z "$ADDED" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "No new workflow files — safe to auto-merge."
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "list<<NEW_WF_EOF"
+              echo "$ADDED"
+              echo "NEW_WF_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "New workflow files from upstream — auto-merge will be skipped:"
+            echo "$ADDED"
+          fi
+
+      - name: Push branch
+        if: steps.check.outputs.up_to_date != 'true'
+        run: git push -u origin "${{ steps.merge.outputs.branch }}"
+
+      - name: Open PR
+        if: steps.check.outputs.up_to_date != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_WF_ANY: ${{ steps.new_workflows.outputs.any }}
+          NEW_WF_LIST: ${{ steps.new_workflows.outputs.list }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            echo "PR already exists for $BRANCH — leaving it alone."
+            exit 0
+          fi
+
+          if [ "$NEW_WF_ANY" = "true" ]; then
+            NOTICE="New upstream workflow files detected — auto-merge skipped. Review and decide whether to keep or disable each:
+
+          \`\`\`
+          $NEW_WF_LIST
+          \`\`\`"
+
+          else
+            NOTICE="No new workflow files from upstream — auto-merge enabled. docker-publish will be dispatched after merge."
+          fi
+
+          BODY="Weekly automated sync with upstream \`graphprotocol/graph-node\` \`master\`.
+
+          $NOTICE
+
+          Fork-local workflow customizations are preserved via \`.gitattributes\` (\`merge=ours\` on \`.github/workflows/**\`)."
+
+          gh pr create \
+            --base master \
+            --head "$BRANCH" \
+            --title "Sync with graphprotocol/graph-node master ($(date -u +%Y-%m-%d))" \
+            --body "$BODY" \
+            --reviewer "$REVIEWER"
+
+      - name: Auto-merge PR (no new workflows)
+        if: steps.check.outputs.up_to_date != 'true' && steps.new_workflows.outputs.any == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge "${{ steps.merge.outputs.branch }}" --merge --delete-branch
+
+      - name: Dispatch docker-publish on master
+        if: steps.check.outputs.up_to_date != 'true' && steps.new_workflows.outputs.any == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run docker-publish.yml --ref master

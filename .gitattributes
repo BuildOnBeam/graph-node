@@ -1,0 +1,8 @@
+# Keep fork-local workflow customizations on upstream merges.
+# The sync workflow registers the 'ours' driver (a no-op) so that any upstream
+# changes conflicting with local edits under .github/workflows/ are auto-resolved
+# in favor of the fork's version.
+#
+# Note: this only covers *conflicting* paths. A brand-new workflow file added
+# upstream will still land on master — disable it by hand if needed.
+.github/workflows/** merge=ours
