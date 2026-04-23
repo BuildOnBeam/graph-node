@@ -7,9 +7,9 @@ permissions:
 
 on:
   workflow_dispatch:
-  schedule:
-    # Run it once a day.
-    - cron: "0 0 * * *"
+  # schedule:
+  #   # Run it once a day.
+  #   - cron: "0 0 * * *"
 
 jobs:
   stale:

@@ -11,6 +11,7 @@ on:
 jobs:
   build:
     name: Build gnd for ${{ matrix.target }}
+    if: github.repository == 'graphprotocol/graph-node'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
