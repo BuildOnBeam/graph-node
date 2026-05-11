@@ -26,7 +26,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.42.1"
+version = "0.43.0"
 edition = "2024"
 authors = ["The Graph core developers & contributors"]
 readme = "README.md"
@@ -35,7 +35,7 @@ repository = "https://github.com/graphprotocol/graph-node"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-alloy = { version = "2.0.0", features = ["dyn-abi", "json-abi", "full", "arbitrary", "json-rpc", "serde"] }
+alloy = { version = "2.0.4", features = ["dyn-abi", "json-abi", "full", "arbitrary", "json-rpc", "serde"] }
 alloy-rpc-types = "2.0.0"
 # rustls is pulled in transitively by alloy (aws_lc_rs) and object_store via
 # reqwest (ring). With both providers linked, rustls 0.23 requires an explicit
@@ -64,8 +64,8 @@ diesel = { version = "2.2.7", features = [
 diesel-async = { version = "0.8.0", features = ["deadpool", "async-connection-wrapper", "tokio", "postgres"] }
 diesel-derive-enum = { version = "2.1.0", features = ["postgres"] }
 diesel-dynamic-schema = { version = "0.2.3", features = ["postgres"] }
-diesel_derives = "2.3.7"
-diesel_migrations = "2.3.1"
+diesel_derives = "2.3.8"
+diesel_migrations = "2.3.2"
 env_logger = "0.11.10"
 envconfig = "0.11.1"
 git-testament = "0.2"
@@ -82,7 +82,7 @@ itertools = "0.14.0"
 lazy_static = "1.5.0"
 prost = "0.14"
 prost-types = "0.14"
-redis = { version = "1.2.0", features = [
+redis = { version = "1.2.1", features = [
     "aio",
     "connection-manager",
     "tokio-comp",
@@ -121,9 +121,9 @@ url = "2.5.8"
 
 # Dependencies related to Amp subgraphs
 ahash = "0.8.11"
-arrow = { version = "=58.1.0" }
-arrow-flight = { version = "=58.1.0", features = ["flight-sql-experimental"] }
-parquet = { version = "=58.1.0" }
+arrow = { version = "=58.2.0" }
+arrow-flight = { version = "=58.2.0", features = ["flight-sql-experimental"] }
+parquet = { version = "=58.2.0" }
 futures = "0.3.31"
 half = "2.7.1"
 indoc = "2.0.7"

@@ -52,7 +52,7 @@ use crate::deployment::{self, OnSync};
 use crate::detail::ErrorDetail;
 use crate::dynds::DataSourcesTable;
 use crate::primary::{DeploymentId, Primary};
-use crate::relational::index::{CreateIndex, IndexList, Method};
+use crate::relational::index::{CreateIndex, IndexCreator, IndexList, Method};
 use crate::relational::{self, Layout, LayoutCache, STATEMENT_TIMEOUT, SqlName, Table};
 use crate::relational_queries::{FromEntityData, JSONData};
 use crate::{AsyncPgConnection, advisory_lock, catalog, retry};
@@ -176,11 +176,6 @@ impl DeploymentStore {
         DeploymentStore(Arc::new(store))
     }
 
-    // Parameter index_def is used to copy over the definition of the indexes from the source subgraph
-    // to the destination one. This happens when it is set to Some. In this case also the BTree attribude
-    // indexes are created later on, when the subgraph has synced. In case this parameter is None, all
-    // indexes are created with the default creation strategy for a new subgraph, and also from the very
-    // start.
     pub(crate) async fn create_deployment(
         &self,
         schema: &InputSchema,
@@ -188,7 +183,6 @@ impl DeploymentStore {
         site: Arc<Site>,
         replace: bool,
         on_sync: OnSync,
-        index_def: Option<IndexList>,
     ) -> Result<(), StoreError> {
         let mut conn = self.pool.get_permitted().await?;
         conn.transaction::<_, StoreError, _>(|conn| {
@@ -223,7 +217,6 @@ impl DeploymentStore {
                         site.clone(),
                         schema,
                         entities_with_causality_region.into_iter().collect(),
-                        index_def,
                     )
                     .await?;
 
@@ -736,12 +729,11 @@ impl DeploymentStore {
         Ok(indexes.into_iter().map(CreateIndex::parse).collect())
     }
 
-    /// Do not use this while already holding a connection as that can lead
-    /// to deadlocks
     pub(crate) async fn load_indexes(&self, site: Arc<Site>) -> Result<IndexList, StoreError> {
-        let store = self.clone();
         let mut conn = self.pool.get_permitted().await?;
-        IndexList::load(&mut conn, site, store).await
+        let layout = self.layout(&mut conn, site).await?;
+
+        IndexList::load(&mut conn, &layout).await
     }
 
     /// Drops an index for a given deployment, concurrently.
@@ -909,7 +901,7 @@ impl DeploymentStore {
         // Layout and index list are schema metadata — safe to load outside
         // the snapshot transaction
         let layout = self.layout(&mut conn, site.cheap_clone()).await?;
-        let index_list = IndexList::load(&mut conn, site.cheap_clone(), self.clone()).await?;
+        let index_list = IndexList::load(&mut conn, &layout).await?;
 
         // Use REPEATABLE READ to get a consistent MVCC snapshot for the
         // entire dump. All queries inside see the same database state,
@@ -1651,11 +1643,21 @@ impl DeploymentStore {
                             .await?;
                     }
 
-                    // Rewind the subgraph so that entity versions that are
-                    // clamped in the future (beyond `block`) become valid for
-                    // all blocks after `block`. `revert_block` gets rid of
-                    // everything including the block passed to it. We want to
-                    // preserve `block` and therefore revert `block+1`
+                    // CopyEntityBatchQuery now reverts entity versions
+                    // during copying, making this rewind redundant for new
+                    // copies. We keep it for backward compatibility: a copy
+                    // that was started before this change and is resumed
+                    // after upgrading will have already-copied rows that
+                    // weren't reverted during copy. For data that was
+                    // already reverted during copy, this is a no-op. This
+                    // code can be removed once a release with this change
+                    // has been out for a while and we are sure that there
+                    // are no more copies in progress that started before
+                    // the change
+                    //
+                    // `revert_block` gets rid of everything including the
+                    // block passed to it. We want to preserve `block` and
+                    // therefore revert `block+1`
                     let start = Instant::now();
                     let block_to_revert: BlockNumber = block
                         .number
@@ -1696,23 +1698,40 @@ impl DeploymentStore {
             .await?;
         }
 
-        let mut conn = self.pool.get_permitted().await?;
-        if ENV_VARS.postpone_attribute_index_creation {
-            // Check if all indexes are valid and recreate them if they
-            // aren't.
-            IndexList::load(&mut conn, site, self.cheap_clone())
-                .await?
-                .recreate_invalid_indexes(&mut conn, &dst)
-                .await?;
-        }
+        // Create any indexes whose creation was postponed when the
+        // deployment was first created. Using `IF NOT EXISTS` and
+        // `CONCURRENTLY` makes this safe to call on every restart.
+        self.create_postponed_indexes(site.cheap_clone()).await?;
 
         // Make sure the block pointer is set. This is important for newly
         // deployed subgraphs so that we respect the 'startBlock' setting
         // the first time the subgraph is started
+        let mut conn = self.pool.get_permitted().await?;
         conn.transaction(|conn| {
             crate::deployment::initialize_block_ptr(conn, &dst.site).scope_boxed()
         })
         .await?;
+        Ok(())
+    }
+
+    /// Create all indexes whose creation was postponed when the
+    /// deployment was first created. Using `IF NOT EXISTS` and
+    /// `CONCURRENTLY` makes this safe to call even when some or all
+    /// indexes already exist.
+    pub(crate) async fn create_postponed_indexes(&self, site: Arc<Site>) -> Result<(), StoreError> {
+        let layout = self.find_layout(site).await?;
+        let creat = layout.index_creator(true, true);
+        let mut conn = self.pool.get_permitted().await?;
+        for table in layout.tables.values() {
+            let indexes = table.indexes(&layout.input_schema).map_err(|e| {
+                StoreError::ConstraintViolation(format!("failed to generate indexes: {}", e))
+            })?;
+            for idx in indexes {
+                if idx.to_postpone() {
+                    IndexCreator::execute(&creat, &mut conn, &idx).await?;
+                }
+            }
+        }
         Ok(())
     }
 

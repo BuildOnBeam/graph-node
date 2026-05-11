@@ -18,7 +18,7 @@ old_bigdecimal = { version = "=0.1.2", features = [
 ], package = "bigdecimal" }
 bytes = "1.0.1"
 bs58 = { workspace = true }
-cid = "0.11.2"
+cid = "0.11.3"
 derive_more = { workspace = true, features = ["debug"] }
 graph_derive = { path = "./derive" }
 diesel = { workspace = true }
@@ -63,7 +63,6 @@ slog-async = "2.5.0"
 slog-envlogger = "2.1.0"
 slog-term = "2.7.0"
 petgraph = "0.8.3"
-tiny-keccak = "1.5.0"
 tokio = { workspace = true}
 tokio-stream = { workspace = true }
 tokio-retry = { workspace = true }
@@ -103,6 +102,7 @@ clap.workspace = true
 maplit = "1.0.2"
 hex-literal = "1.1"
 wiremock = "0.6.5"
+tempfile = "3.8"
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
