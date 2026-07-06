@@ -189,7 +189,7 @@ pub struct Catalog {
 
     /// Whether the database supports `int4_minmax_multi_ops` etc.
     /// See the [Postgres docs](https://www.postgresql.org/docs/15/brin-builtin-opclasses.html)
-    has_minmax_multi_ops: bool,
+    pub has_minmax_multi_ops: bool,
 
     /// Whether the column `pg_stats.range_bounds_histogram` introduced in
     /// Postgres 17 exists. See the [Postgres
@@ -880,6 +880,36 @@ pub(crate) async fn check_index_is_valid(
         .map_err::<StoreError, _>(Into::into)?
         .map(|check| check.is_valid);
     Ok(matches!(result, Some(true)))
+}
+
+/// Check whether there is an index creation currently running for any index
+/// in the given schema. If there is, return the PID of the backend that is
+/// creating the index and the name of the index being created.
+pub(crate) async fn index_creation_is_running(
+    conn: &mut AsyncPgConnection,
+    schema_name: &str,
+) -> Result<Option<(i32, String)>, StoreError> {
+    #[derive(Queryable, QueryableByName)]
+    struct IndexCreationCheck {
+        #[diesel(sql_type = Integer)]
+        pid: i32,
+        #[diesel(sql_type = Text)]
+        index_name: String,
+    }
+
+    let query = "
+        select ci.pid, ci.index_relid::regclass as index_name \
+        from pg_stat_progress_create_index ci \
+        join pg_class c on ci.relid = c.oid \
+        join pg_namespace n on c.relnamespace = n.oid \
+        where n.nspname = $1";
+    sql_query(query)
+        .bind::<Text, _>(schema_name)
+        .get_result::<IndexCreationCheck>(conn)
+        .await
+        .optional()
+        .map(|check| check.map(|check| (check.pid, check.index_name)))
+        .map_err::<StoreError, _>(Into::into)
 }
 
 pub(crate) async fn indexes_for_table(
