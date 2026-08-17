@@ -27,7 +27,6 @@ use diesel::pg::Pg;
 use diesel::serialize::{Output, ToSql};
 use diesel::sql_types::Text;
 use diesel::{OptionalExtension, QueryDsl, QueryResult, debug_query, sql_query};
-use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl, SimpleAsyncConnection};
 
 use graph::blockchain::BlockTime;
@@ -45,7 +44,6 @@ use graph::schema::{
     InputSchema,
 };
 use graph::slog::{debug, warn};
-use index::IndexList;
 use inflector::Inflector;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -383,13 +381,12 @@ impl Layout {
         site: Arc<Site>,
         schema: &InputSchema,
         entities_with_causality_region: BTreeSet<EntityType>,
-        index_def: Option<IndexList>,
     ) -> Result<Layout, StoreError> {
         let catalog =
             Catalog::for_creation(conn, site.cheap_clone(), entities_with_causality_region).await?;
         let layout = Self::new(site, schema, catalog)?;
         let sql = layout
-            .as_ddl(index_def)
+            .as_ddl()
             .map_err(|_| StoreError::Unknown(anyhow!("failed to generate DDL for layout")))?;
         conn.batch_execute(&sql).await?;
         Ok(layout)
@@ -908,14 +905,11 @@ impl Layout {
 
         let start = Instant::now();
         let values = conn
-            .transaction(|conn| {
-                async {
-                    if let Some(ref timeout_sql) = *STATEMENT_TIMEOUT {
-                        conn.batch_execute(timeout_sql).await?;
-                    }
-                    query.load::<EntityData>(conn).await
+            .transaction(async |conn| {
+                if let Some(ref timeout_sql) = *STATEMENT_TIMEOUT {
+                    conn.batch_execute(timeout_sql).await?;
                 }
-                .scope_boxed()
+                query.load::<EntityData>(conn).await
             })
             .await
             .map_err(|e| {
@@ -1758,12 +1752,24 @@ impl Table {
     }
 
     /// Find the column `name` in this table. The name must be in snake case,
-    /// i.e., use SQL conventions
+    /// i.e., use SQL conventions.
+    ///
+    /// Fulltext search columns (`ColumnType::TSVector`) are deliberately
+    /// skipped since they are not queryable entity attributes. Use
+    /// [`Table::column_including_fulltext`] when the fulltext columns are
+    /// needed, e.g. when copying a table.
     pub fn column(&self, name: &SqlName) -> Option<&Column> {
         self.columns
             .iter()
             .filter(|column| !matches!(column.column_type, ColumnType::TSVector(_)))
             .find(|column| &column.name == name)
+    }
+
+    /// Find the column `name` in this table, including fulltext search
+    /// columns which [`Table::column`] hides. The name must be in snake
+    /// case, i.e., use SQL conventions.
+    pub fn column_including_fulltext(&self, name: &SqlName) -> Option<&Column> {
+        self.columns.iter().find(|column| &column.name == name)
     }
 
     /// Find the column for `field` in this table. The name must be the
