@@ -58,21 +58,32 @@ const RPC_EXECUTION_ERRORS: &[&str] = &[
     "invalidjump",
     "notactivated",
     "invalidfeopcode",
+    // Reth surfaces EVM halts via `EvmHalt(HaltReason)`, formatted with the
+    // reason's `Debug` repr (`"EVM error: {0:?}"`). revm's `HaltReason`
+    // variants are CamelCase with no spaces, so e.g. a stack underflow arrives
+    // as "EVM error: StackUnderflow", which the space-separated "stack
+    // underflow" above does not match. "invalidjump"/"invalidfeopcode" already
+    // cover the matching variants; these add the rest. Reth's OutOfGas is
+    // handled before EvmHalt and rendered as "out of gas: ...", so it is
+    // already covered above. See https://github.com/streamingfast/eth-go/pull/10.
+    "stackunderflow",
+    "stackoverflow",
+    "opcodenotfound",
 ];
 
-/// Helper that checks if a geth style RPC error message corresponds to a revert.
+/// Helper that checks if a RPC error message corresponds to a revert.
 fn is_rpc_revert_message(message: &str) -> bool {
-    let env_geth_call_errors = ENV_VARS.geth_eth_call_errors.iter();
+    let env_rpc_call_errors = ENV_VARS.rpc_eth_call_errors.iter();
     let mut execution_errors = RPC_EXECUTION_ERRORS
         .iter()
         .copied()
-        .chain(env_geth_call_errors.map(|s| s.as_str()));
+        .chain(env_rpc_call_errors.map(|s| s.as_str()));
     execution_errors.any(|e| message.to_lowercase().contains(e))
 }
 
 /// Decode a Solidity revert(reason) payload, returning the reason string when possible.
 fn as_solidity_revert_reason(bytes: &[u8]) -> Option<String> {
-    let selector = &tiny_keccak::keccak256(b"Error(string)")[..4];
+    let selector = &graph::prelude::alloy::primitives::keccak256(b"Error(string)")[..4];
     if bytes.len() >= 4 && &bytes[..4] == selector {
         abi::DynSolType::String
             .abi_decode(&bytes[4..])
