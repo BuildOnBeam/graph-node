@@ -60,6 +60,13 @@ those.
   is not set, the default value will be `0`.
 - `GRAPH_ETH_GET_LOGS_MAX_CONTRACTS`: Maximum number of contracts to query in a single `eth_getLogs` request.
   Defaults to 2000.
+- `GRAPH_RPC_ETH_GET_LOGS_ERRORS`: Additional `eth_getLogs` error messages that mean the
+  request exceeded the provider's block-range or result cap, so graph-node shrinks the
+  block range instead of retrying. A `;`-separated list of substrings, matched
+  case-insensitively against the error message, for providers not already recognised.
+- `GRAPH_RPC_ETH_CALL_ERRORS`: Additional `eth_call` error messages to treat as a
+  deterministic revert rather than a transient failure. A `;`-separated list of substrings,
+  matched case-insensitively against the error message.
 
 ## Firehose configuration
 
@@ -315,3 +322,55 @@ those.
   Disabling the store call cache may significantly impact performance; the actual impact depends on
   the average execution time of an `eth_call` compared to the cost of a database lookup for a cached result.
   (default: false)
+
+## Log Store Configuration
+
+`graph-node` supports storing and querying subgraph logs through multiple backends: Elasticsearch, Loki, local files, or disabled.
+
+**For complete log store documentation**, including detailed configuration, querying examples, and choosing the right backend, see the **[Log Store Guide](log-store.md)**.
+
+### Quick Reference
+
+**Backend selection:**
+- `GRAPH_LOG_STORE_BACKEND`: `disabled` (default), `elasticsearch`, `loki`, or `file`
+
+**Elasticsearch:**
+- `GRAPH_LOG_STORE_ELASTICSEARCH_URL`: Elasticsearch endpoint URL (required)
+- `GRAPH_LOG_STORE_ELASTICSEARCH_USER`: Username (optional)
+- `GRAPH_LOG_STORE_ELASTICSEARCH_PASSWORD`: Password (optional)
+- `GRAPH_LOG_STORE_ELASTICSEARCH_INDEX`: Index name (default: `subgraph`)
+
+**Loki:**
+- `GRAPH_LOG_STORE_LOKI_URL`: Loki endpoint URL (required)
+- `GRAPH_LOG_STORE_LOKI_TENANT_ID`: Tenant ID (optional)
+
+**File-based:**
+- `GRAPH_LOG_STORE_FILE_DIR`: Log directory (required)
+- `GRAPH_LOG_STORE_FILE_MAX_SIZE`: Max file size in bytes (default: 104857600 = 100MB)
+- `GRAPH_LOG_STORE_FILE_RETENTION_DAYS`: Retention period (default: 30)
+
+**Deprecated variables** (will be removed in future versions):
+- `GRAPH_ELASTICSEARCH_URL` → use `GRAPH_LOG_STORE_ELASTICSEARCH_URL`
+- `GRAPH_ELASTICSEARCH_USER` → use `GRAPH_LOG_STORE_ELASTICSEARCH_USER`
+- `GRAPH_ELASTICSEARCH_PASSWORD` → use `GRAPH_LOG_STORE_ELASTICSEARCH_PASSWORD`
+- `GRAPH_ELASTIC_SEARCH_INDEX` → use `GRAPH_LOG_STORE_ELASTICSEARCH_INDEX`
+
+### Example: File-based Logs for Local Development
+
+```bash
+mkdir -p ./graph-logs
+export GRAPH_LOG_STORE_BACKEND=file
+export GRAPH_LOG_STORE_FILE_DIR=./graph-logs
+
+graph-node \
+  --postgres-url postgresql://graph:pass@localhost/graph-node \
+  --ethereum-rpc mainnet:https://... \
+  --ipfs 127.0.0.1:5001
+```
+
+See the **[Log Store Guide](log-store.md)** for:
+- Detailed configuration for all backends
+- How log stores work internally
+- GraphQL query examples
+- Choosing the right backend for your use case
+- Best practices and troubleshooting

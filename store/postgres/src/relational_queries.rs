@@ -5091,6 +5091,7 @@ pub struct CopyEntityBatchQuery<'a> {
     columns: Vec<&'a Column>,
     first_vid: i64,
     last_vid: i64,
+    target_block: BlockNumber,
 }
 
 impl<'a> CopyEntityBatchQuery<'a> {
@@ -5099,10 +5100,17 @@ impl<'a> CopyEntityBatchQuery<'a> {
         src: &'a Table,
         first_vid: i64,
         last_vid: i64,
+        target_block: BlockNumber,
     ) -> Result<Self, StoreError> {
         let mut columns = Vec::new();
         for dcol in &dst.columns {
-            if let Some(scol) = src.column(&dcol.name) {
+            // Match against all source columns, INCLUDING fulltext (tsvector)
+            // columns, which `Table::column` deliberately hides. The stored
+            // tsvector is copied verbatim; without this, fulltext columns
+            // would be silently dropped from the copy (they are nullable, so
+            // the error branch below is not taken) and the destination's
+            // search index would be left empty.
+            if let Some(scol) = src.column_including_fulltext(&dcol.name) {
                 if let Some(msg) = dcol.is_assignable_from(scol, &src.object) {
                     return Err(anyhow!("{}", msg).into());
                 } else {
@@ -5125,6 +5133,7 @@ impl<'a> CopyEntityBatchQuery<'a> {
             columns,
             first_vid,
             last_vid,
+            target_block,
         })
     }
 
@@ -5209,7 +5218,16 @@ impl<'a> QueryFragment<Pg> for CopyEntityBatchQuery<'a> {
                 );
                 out.push_sql(&checked_conversion);
             }
-            (false, false) => out.push_sql(BLOCK_RANGE_COLUMN),
+            (false, false) => {
+                let range_conv = format!(
+                    r#"
+                case when upper({BLOCK_RANGE_COLUMN}) > {}
+                     then int4range(lower({BLOCK_RANGE_COLUMN}), null)
+                     else {BLOCK_RANGE_COLUMN} end"#,
+                    self.target_block
+                );
+                out.push_sql(&range_conv)
+            }
         }
 
         match (self.src.has_causality_region, self.dst.has_causality_region) {
@@ -5239,6 +5257,16 @@ impl<'a> QueryFragment<Pg> for CopyEntityBatchQuery<'a> {
         out.push_bind_param::<BigInt, _>(&self.first_vid)?;
         out.push_sql(" and vid <= ");
         out.push_bind_param::<BigInt, _>(&self.last_vid)?;
+        out.push_sql(" and ");
+        if self.src.immutable {
+            out.push_sql(BLOCK_COLUMN);
+        } else {
+            out.push_sql("lower(");
+            out.push_sql(BLOCK_RANGE_COLUMN);
+            out.push_sql(")");
+        }
+        out.push_sql(" <= ");
+        out.push_bind_param::<Integer, _>(&self.target_block)?;
         out.push_sql("\n returning ");
         if self.dst.immutable {
             out.push_sql("true");
