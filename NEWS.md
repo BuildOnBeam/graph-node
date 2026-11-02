@@ -1,5 +1,148 @@
 # NEWS
 
+## v0.45.0
+
+```
+$ docker pull graphprotocol/graph-node:v0.45.0
+```
+
+### Breaking Changes
+
+- **`GRAPH_GETH_ETH_CALL_ERRORS` renamed to `GRAPH_RPC_ETH_CALL_ERRORS`.** The env var (and internal config field) controlling which `eth_call` error messages are treated as reverts is renamed for provider-neutral naming. Update it before upgrading, or the setting is silently ignored and defaults apply. ([#6487](https://github.com/graphprotocol/graph-node/pull/6487))
+
+### What's New
+
+- **Postponed attribute index creation re-enabled, now built in the background.** `GRAPH_POSTPONE_ATTRIBUTE_INDEX_CREATION` (introduced in v0.44.0 but inert — hardcoded off) now actually defers non-critical attribute indexes until a new deployment nears chain head (`GRAPH_POSTPONE_INDEXES_CREATION_THRESHOLD`, default 10000 blocks from head). Index creation now runs in a background task instead of blocking block processing, and interrupted `CREATE INDEX CONCURRENTLY` runs are detected and rebuilt on retry instead of being silently skipped. ([#6608](https://github.com/graphprotocol/graph-node/pull/6608))
+- **`ethereum.decodeParams` host function.** Decodes calldata/event data whose top-level type is a dynamic tuple (e.g. Gnosis Safe's `execTransaction`), which `ethereum.decode` cannot handle since it expects a single ABI value with a leading offset word. Gated behind apiVersion 0.0.10; `ethereum.decode` itself is unchanged. ([#6649](https://github.com/graphprotocol/graph-node/pull/6649))
+
+### Bug Fixes
+
+- Fixed `EthereumLogFilter` merging per-handler `receipt` flags with overwrite instead of OR semantics, so a handler declaring `receipt: true` could silently run with `event.receipt == null` if another handler on the same filter key declared `receipt: false`. ([#6558](https://github.com/graphprotocol/graph-node/pull/6558))
+- Fixed grafts silently succeeding when the graft block was below the base deployment's earliest available block, leaving the destination missing pre-graft entity versions and producing `unexpected null in handler` errors on every event; `Graft::validate` now rejects these upfront. ([#6610](https://github.com/graphprotocol/graph-node/pull/6610))
+- Fixed `_logs` queries returning an empty result (indistinguishable from a subgraph producing no logs) when no log store is configured; now returns a `NotSupported` error. ([#6637](https://github.com/graphprotocol/graph-node/pull/6637))
+- Fixed startup panicking when a shard is configured with `pool_size = 0`; such shards' chains are now skipped instead of erroring. ([#6648](https://github.com/graphprotocol/graph-node/pull/6648))
+- Fixed the Firehose extended-blocks check matching on `optimism-mainnet` instead of the `optimism` chain ID used by Firehose endpoints, so Optimism's extended block data went undetected. ([#6662](https://github.com/graphprotocol/graph-node/pull/6662))
+- Fixed fulltext (`tsvector`) search columns being silently dropped when copying or grafting a subgraph, leaving the destination's fulltext index empty. ([#6687](https://github.com/graphprotocol/graph-node/pull/6687))
+- Fixed Reth `StackUnderflow`/`StackOverflow`/`OpcodeNotFound` EVM halts being misclassified as non-deterministic — Reth surfaces them via its `Debug` format (e.g. `EVM error: StackUnderflow`), which didn't match graph-node's space-separated deterministic-error patterns, so subgraphs indexing via Reth-backed RPC providers stalled and retried instead of recording a deterministic revert. ([#6645](https://github.com/graphprotocol/graph-node/pull/6645))
+
+### Graphman
+
+- Fixed `graphman dump` panicking on tables with more than ~2 GiB in a single string/binary column; batches are now split into byte-bounded slices before conversion to Arrow. ([#6646](https://github.com/graphprotocol/graph-node/pull/6646))
+
+### gnd (Graph Node Dev)
+
+- Fixed `gnd add` producing a subgraph that failed `codegen`/`build` because it never wrote new event entities to `schema.graphql`; unified `add` and `init` onto one scaffolding path, which also fixes event-name collisions across data sources, overloaded-event disambiguation, small-integer type mapping, and reserved-word parameter names. ([#6660](https://github.com/graphprotocol/graph-node/pull/6660))
+
+### Upgrade Notes
+
+- If you set `GRAPH_GETH_ETH_CALL_ERRORS`, rename it to `GRAPH_RPC_ETH_CALL_ERRORS` before upgrading. ([#6487](https://github.com/graphprotocol/graph-node/pull/6487))
+- `GRAPH_POSTPONE_ATTRIBUTE_INDEX_CREATION` now actually takes effect (it was a no-op in v0.44.0). If you already set it expecting no behavior change, be aware new deployments will now defer some attribute indexes until near chain head. ([#6608](https://github.com/graphprotocol/graph-node/pull/6608))
+- If a subgraph was grafted from a base block below the base deployment's earliest available block before this release, it may be missing pre-graft entity versions; re-create the graft from a valid earliest block. ([#6610](https://github.com/graphprotocol/graph-node/pull/6610))
+
+### Contributors
+
+Thanks to all contributors for this release: @cargopete, @dimitrovmaksim, @fordN, @incrypto32, @lutter, @YaroShkvorets
+
+**Full Changelog**: https://github.com/graphprotocol/graph-node/compare/v0.44.0...v0.45.0
+
+## v0.44.0
+
+```
+$ docker pull graphprotocol/graph-node:v0.44.0
+```
+
+### Critical Fix
+
+- **`EntityCache::load_related` returned wrong derived-collection membership on same-block parent reassignment.** Membership was decided against intermediate cache layers rather than the entity's final state, so entities reassigned to a new parent within the same block could be left in the old collection, omitted from the new one, or wrongly retained after a cross-handler revert. See Upgrade Notes. ([#6548](https://github.com/graphprotocol/graph-node/pull/6548))
+
+### Breaking Changes
+
+- **Elasticsearch CLI flags removed.** `--elasticsearch-url`, `--elasticsearch-user`, `--elasticsearch-password` (and the matching `ELASTICSEARCH_*` env vars) are gone. Configure Elasticsearch under the new `[log_store]` section in `graph-node.toml`. See Upgrade Notes. ([#6278](https://github.com/graphprotocol/graph-node/pull/6278))
+
+### What's New
+
+- **Query subgraph logs over GraphQL.** A new `_logs` field exposes subgraph-emitted logs (mapping `log.*` calls, runtime, system) with filters for level, timestamp range, and text search, plus pagination and `orderDirection`. The old Elasticsearch sink for subgraph logs is replaced by a unified `LogStore` abstraction with three backends configured under a new `[log_store]` section in `graph-node.toml`: File (JSON Lines), Loki, or Elasticsearch. Omit `[log_store]` to disable; logs still go to stdout/stderr. ([#6278](https://github.com/graphprotocol/graph-node/pull/6278))
+
+<!--
+TODO(next release): re-add the postponed-index-creation entry once #6608 is verified in the hosted service.
+The implementation (#6434, #6583) is in this release but disabled via `graph: Disable postponed index creation`
+(`postpone_attribute_index_creation` hardcoded to false). Suggested bullet:
+
+- **Postponed index creation extended to syncing subgraphs.** `GRAPH_POSTPONE_ATTRIBUTE_INDEX_CREATION` previously only deferred indexes during copies. It now also postpones indexes during the initial sync of any subgraph, with a new `GRAPH_POSTPONE_INDEXES_CREATION_THRESHOLD` (default 10000) controlling how close to chain head the deployment must get before they're created. Tracked per-deployment so creation runs at most once, even if indexes are manually dropped later. ([#6434](https://github.com/graphprotocol/graph-node/pull/6434) [#6583](https://github.com/graphprotocol/graph-node/pull/6583))
+-->
+
+
+### Improvements
+
+- Revert entity versions during copy instead of in a separate post-copy pass, speeding up subgraph copy and graft. ([#6472](https://github.com/graphprotocol/graph-node/pull/6472))
+
+### Bug Fixes
+
+- Fixed `trace_filter` deserialization failing on providers that omit `result.output` (notably Sonic), which caused repeated trace ingestion retries. Fixed upstream in alloy 2.0.5 ([alloy#3931](https://github.com/alloy-rs/alloy/pull/3931)) and picked up via the bump in this release. ([#6576](https://github.com/graphprotocol/graph-node/pull/6576))
+- Fixed runner panics on out-of-range `BigInt` values: `to_signed_u256` replaced by fallible `to_i256`, and `to_unsigned_u256` now errors on values `>= 2^256` instead of panicking. ([#6560](https://github.com/graphprotocol/graph-node/pull/6560))
+- Fixed `graphman chain change-shard` failing with a duplicate-key error on revert to the original shard. Backups now use unique names and revert reuses the existing `<chain>-old`. ([#6199](https://github.com/graphprotocol/graph-node/pull/6199))
+
+### Upgrade Notes
+
+- v0.44.0 changes `EntityCache::load_related` results for same-block parent-reassignment edge cases ([#6548](https://github.com/graphprotocol/graph-node/pull/6548)). Subgraphs that read derived fields within handlers may diverge in POI from v0.43.0 on blocks exhibiting this pattern; resync from before the affected blocks if affected. The v0.44.0 result is canonical.
+- If you set `--elasticsearch-*` flags or `ELASTICSEARCH_*` env vars, migrate to a `[log_store]` section in `graph-node.toml` before upgrading. See `docs/log-store.md`. ([#6278](https://github.com/graphprotocol/graph-node/pull/6278))
+
+### Contributors
+
+Thanks to all contributors for this release: @erayack, @fordN, @incrypto32, @lutter
+
+**Full Changelog**: https://github.com/graphprotocol/graph-node/compare/v0.43.0...v0.44.0
+
+## v0.43.0
+
+### What's New
+
+- **`skipDuplicates` for immutable entities.** A new `skipDuplicates` parameter on the `@entity` directive (`@entity(immutable: true, skipDuplicates: true)`) silently skips duplicate inserts instead of failing the subgraph. This unblocks subgraph composition on Amp-powered subgraphs where SQL queries can produce the same entities across block ranges. ([#6458](https://github.com/graphprotocol/graph-node/pull/6458))
+- **Per-chain RPC settings via TOML config.** Chain-specific tuning parameters (`json_rpc_timeout`, `request_retries`, `max_block_range_size`, `polling_interval`, `block_batch_size`, etc.) can now be set per chain in `config.toml` instead of relying on global environment variables. Fully backwards compatible — env vars remain the fallback. ([#6459](https://github.com/graphprotocol/graph-node/pull/6459))
+- **RPC provider failover for block ingestor.** When the current RPC provider becomes unreachable during block ingestion polling, graph-node now automatically switches to a healthy alternative provider. ([#6430](https://github.com/graphprotocol/graph-node/pull/6430))
+- Warn on startup when running a debug build, with `[DEBUG-BUILD]` prefix on all log lines. ([#6488](https://github.com/graphprotocol/graph-node/pull/6488))
+
+### Improvements
+
+- **Call cache eviction rewrite.** Replaced the old per-contract iteration approach with ctid-based join deletes against the `call_meta` table, significantly faster on large `call_cache` tables. The old `--ttl-max-contracts` flag has been replaced by `--max-contracts`, which computes an effective TTL cutoff instead of limiting per-invocation iteration. Eviction now also returns stats on the number of contracts and entries removed. ([#6476](https://github.com/graphprotocol/graph-node/pull/6476)) ([#6477](https://github.com/graphprotocol/graph-node/pull/6477))
+- Reduced unnecessary `eth_getBlockByHash` and `eth_getBlockByNumber` RPC calls by checking the block cache first in `block_pointer_from_number` and `fetch_full_block_with_rpc`. ([#6491](https://github.com/graphprotocol/graph-node/pull/6491), partially reverted by [#6537](https://github.com/graphprotocol/graph-node/pull/6537))
+- Header-only `ChainStore` query methods (`ancestor_block_ptr`, `block_parent_ptr`) skip deserializing the full block `data` JSONB column when only hash/number/parent are needed. ([#6456](https://github.com/graphprotocol/graph-node/pull/6456))
+- Batch checking for update attempts on immutable entities, reducing per-entity overhead.
+- Node name is now used as the PostgreSQL `application_name` when `PGAPPNAME` is not set, making it easier to identify graph-node connections in `pg_stat_activity`.
+
+### Bug Fixes
+
+- Fixed dropped block trigger when `once` and `polling` filters match the same block — only one trigger type was firing. ([#6530](https://github.com/graphprotocol/graph-node/pull/6530))
+- Fixed block stream ignoring configured `endBlock` in two cases: the block-skip optimization bypassing the `max_end_block` check, and `max_end_block` being set to `None` when multiple data sources share the same `endBlock`. ([#6474](https://github.com/graphprotocol/graph-node/pull/6474))
+- Fixed GraphQL introspection not returning `isDeprecated: false` for `__InputValue`, which caused some client libraries to fail. ([#6475](https://github.com/graphprotocol/graph-node/pull/6475))
+- Fixed IPC provider connections failing when configured with `ipc://` or `file://` URLs — the URL was passed directly to the transport instead of extracting the file path. ([#6443](https://github.com/graphprotocol/graph-node/pull/6443))
+- Fixed `graphman config pools` not working due to hardcoded pool size override. ([#6444](https://github.com/graphprotocol/graph-node/pull/6444))
+- Fixed unfail retry mechanism stopping after the first attempt when the deployment head was still behind the error block. ([#6529](https://github.com/graphprotocol/graph-node/pull/6529))
+
+### Note on `ethereum.decode()` whitespace handling
+
+The migration from `ethabi` to `alloy` in v0.42.0 ([#6063](https://github.com/graphprotocol/graph-node/pull/6063)) incidentally fixed a long-standing parsing bug in `ethabi` where type strings containing whitespace before a type name (e.g. `" address"` with a leading space) were silently decoded as `Uint(8)` instead of the intended type. `alloy` parses these correctly.
+
+Subgraphs that relied on the incorrect `Uint(8)` decoding to subsequently call `.toBigInt()` on what is actually an `Address` value will abort on v0.42.0+ with:
+
+```
+Mapping aborted ... Ethereum value is not an int or uint.
+```
+
+This is not a graph-node regression. Recompile the subgraph with the correct accessor (`.toAddress()` for addresses) to fix. See [#6461](https://github.com/graphprotocol/graph-node/issues/6461) for details.
+
+### gnd (Graph Node Dev)
+
+- `gnd indexer` command that delegates to `graph-indexer`, allowing indexer management (allocations, rules, cost models, status) directly through gnd. ([#6492](https://github.com/graphprotocol/graph-node/pull/6492))
+- `gnd deploy` now prompts for `--version-label` in interactive mode and requires it in non-interactive mode. ([#6532](https://github.com/graphprotocol/graph-node/pull/6532))
+- Test framework improvements: partial receipt.logs support, mock IPFS/Arweave clients for file data source testing. ([#6442](https://github.com/graphprotocol/graph-node/pull/6442))
+
+### Contributors
+
+Thanks to all contributors for this release: @aayushbaluni, @dimitrovmaksim, @incrypto32, @isum, @lutter, @suntzu
+
+**Full Changelog**: https://github.com/graphprotocol/graph-node/compare/v0.42.1...v0.43.0
+
 ## v0.42.1
 
 ### Bug Fixes
