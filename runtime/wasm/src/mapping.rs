@@ -302,8 +302,10 @@ impl ValidModule {
 
             name
         });
-        let parity_module = wasm_instrument::gas_metering::inject(parity_module, &GasRules, "gas")
-            .map_err(|_| anyhow!("Failed to inject gas counter"))?;
+        let backend = wasm_instrument::gas_metering::host_function::Injector::new("gas", "gas");
+        let parity_module =
+            wasm_instrument::gas_metering::inject(parity_module, backend, &GasRules)
+                .map_err(|_| anyhow!("Failed to inject gas counter"))?;
         let raw_module = parity_module.into_bytes()?;
 
         // We use Cranelift as a compilation engine. Cranelift is an optimizing compiler, but that
@@ -320,7 +322,6 @@ impl ValidModule {
             graph::env::WasmOptLevel::SpeedAndSize => wasmtime::OptLevel::SpeedAndSize,
         });
         config.max_wasm_stack(ENV_VARS.mappings.max_stack_size);
-        config.async_support(true);
 
         let engine = &wasmtime::Engine::new(&config)?;
         let module = wasmtime::Module::from_binary(engine, &raw_module)?;
